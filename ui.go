@@ -46,6 +46,7 @@ type Model struct {
 	list           *TodoList
 	storage        *Storage
 	cursor         int
+	scrollOffset   int // Track viewport offset for scrolling
 	mode           Mode
 	textarea       textarea.Model
 	filterInput    string
@@ -184,22 +185,26 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(todos)-1 {
 			m.cursor++
 		}
+		m = m.adjustScrollOffset()
 		return m, nil
 
 	case "k", "up":
 		if m.cursor > 0 {
 			m.cursor--
 		}
+		m = m.adjustScrollOffset()
 		return m, nil
 
 	case "g":
 		m.cursor = 0
+		m = m.adjustScrollOffset()
 		return m, nil
 
 	case "G":
 		if len(todos) > 0 {
 			m.cursor = len(todos) - 1
 		}
+		m = m.adjustScrollOffset()
 		return m, nil
 
 	case "J", "ctrl+j":
@@ -407,25 +412,45 @@ func (m Model) renderNormal() string {
 	var b strings.Builder
 
 	// Header (takes 2 lines)
-	header := headerStyle.Render(fmt.Sprintf(" td - Todo List Manager%s[%s] ", strings.Repeat(" ", max(0, m.width-45)), m.mode))
+	headerLeft := " td - Todo List Manager"
+	headerRight := fmt.Sprintf("[%s] ", m.mode)
+	padding := max(0, m.width-len(headerLeft)-len(headerRight))
+	headerText := headerLeft + strings.Repeat(" ", padding) + headerRight
+	header := headerStyle.Render(headerText)
 	b.WriteString(header + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n")
+
+	// Track lines used
+	linesUsed := 2 // header
 
 	// Todos
 	todos := m.getVisibleTodos()
 	if len(todos) == 0 {
 		b.WriteString(dimStyle.Render("\n  No todos to display.\n  Press 'a' to add a new todo, '?' for help.\n\n"))
+		linesUsed += 4
 	} else {
 		// Calculate how many lines we can show (reserve space for header, footer, and message)
 		// Header: 2 lines, Footer: 3 lines (separator + 2 lines status), Message: 1 line
 		// This gives us a buffer to ensure footer is always visible
 		maxContentLines := m.height - 8
+		maxVisibleItems := max(1, (m.height-8)/4) // Conservative estimate of items that fit
+
+		// Show scroll indicator at top if we're scrolled down
+		if m.scrollOffset > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more items above ↑", m.scrollOffset)) + "\n")
+			linesUsed++
+		}
 
 		linesRendered := 0
-		for i, todo := range todos {
+		itemsShown := 0
+		startIdx := m.scrollOffset
+		endIdx := min(len(todos), m.scrollOffset+maxVisibleItems)
+
+		for i := startIdx; i < endIdx; i++ {
+			todo := todos[i]
+
+			// Stop if we've run out of space
 			if maxContentLines > 0 && linesRendered >= maxContentLines {
-				// Show indicator that there are more items
-				b.WriteString(dimStyle.Render(fmt.Sprintf("\n  ... %d more items (scroll with j/k) ...\n", len(todos)-i)))
 				break
 			}
 
@@ -438,17 +463,34 @@ func (m Model) renderNormal() string {
 				lines += len(strings.Split(todo.Description, "\n"))
 			}
 			linesRendered += lines
+			linesUsed += lines
+			itemsShown++
+		}
+
+		// Show scroll indicator at bottom if there are more items
+		remainingItems := len(todos) - (m.scrollOffset + itemsShown)
+		if remainingItems > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more items below ↓", remainingItems)) + "\n")
+			linesUsed++
 		}
 	}
 
-	// Always show footer - add a newline before it if needed
-	footer := m.renderFooter()
-	b.WriteString("\n" + strings.Repeat("─", m.width) + "\n")
-	b.WriteString(footer)
+	// Add padding to push footer to bottom
+	// Footer takes: 1 line (separator) + 1 line (status) + 1 line (message or blank)
+	footerLines := 3
+	paddingLines := m.height - linesUsed - footerLines - 1 // -1 because we don't want a final newline
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
 
-	// Message
+	// Always show footer at the bottom
+	footer := m.renderFooter()
+	b.WriteString(strings.Repeat("─", m.width) + "\n")
+	b.WriteString(footer + "\n")
+
+	// Message on final line
 	if m.message != "" && time.Now().Before(m.messageTimeout) {
-		b.WriteString("\n" + successStyle.Render(m.message))
+		b.WriteString(successStyle.Render(m.message))
 	}
 
 	return b.String()
@@ -512,38 +554,72 @@ func (m Model) renderTodo(todo Todo, selected bool) string {
 // renderAdd renders the add mode view
 func (m Model) renderAdd() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(fmt.Sprintf(" Add New Todo [%s] ", m.mode)) + "\n")
+
+	headerText := " Add New Todo"
+	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
+	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
+	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S or Ctrl+Enter to save, Esc to cancel") + "\n")
+	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel") + "\n")
+
+	// Fill remaining space
+	linesUsed := 6 + strings.Count(m.textarea.View(), "\n")
+	paddingLines := max(0, m.height-linesUsed)
+	b.WriteString(strings.Repeat("\n", paddingLines))
+
 	return b.String()
 }
 
 // renderEdit renders the edit mode view
 func (m Model) renderEdit() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(fmt.Sprintf(" Edit Todo [%s] ", m.mode)) + "\n")
+
+	headerText := " Edit Todo"
+	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
+	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
+	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S or Ctrl+Enter to save, Esc to cancel") + "\n")
+	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel") + "\n")
+
+	// Fill remaining space
+	linesUsed := 6 + strings.Count(m.textarea.View(), "\n")
+	paddingLines := max(0, m.height-linesUsed)
+	b.WriteString(strings.Repeat("\n", paddingLines))
+
 	return b.String()
 }
 
 // renderFilter renders the filter mode view
 func (m Model) renderFilter() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(fmt.Sprintf(" Filter by Tags [%s] ", m.mode)) + "\n")
+
+	headerText := " Filter by Tags"
+	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
+	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
+	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString("  Enter tags separated by spaces (e.g., work urgent)\n")
 	b.WriteString("  Filter: " + m.filterInput + "█\n\n")
 	b.WriteString(dimStyle.Render("Enter to apply filter, Esc to cancel") + "\n")
+
+	// Fill remaining space
+	linesUsed := 7
+	paddingLines := max(0, m.height-linesUsed)
+	b.WriteString(strings.Repeat("\n", paddingLines))
+
 	return b.String()
 }
 
 // renderDelete renders the delete confirmation view
 func (m Model) renderDelete() string {
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(" Delete Todo ") + "\n")
+
+	headerText := " Delete Todo"
+	padding := max(0, m.width-len(headerText))
+	header := headerText + strings.Repeat(" ", padding)
+	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 
 	todos := m.getVisibleTodos()
@@ -554,11 +630,21 @@ func (m Model) renderDelete() string {
 	}
 
 	b.WriteString(errorStyle.Render("  Press 'y' to confirm, 'n' or Esc to cancel") + "\n")
+
+	// Fill remaining space
+	linesUsed := 8
+	paddingLines := max(0, m.height-linesUsed)
+	b.WriteString(strings.Repeat("\n", paddingLines))
+
 	return b.String()
 }
 
 // renderHelp renders the help overlay
 func (m Model) renderHelp() string {
+	headerText := " Help"
+	padding := max(0, m.width-len(headerText))
+	header := headerText + strings.Repeat(" ", padding)
+
 	help := `
  td - Todo List Manager - Help
 
@@ -593,9 +679,18 @@ func (m Model) renderHelp() string {
 
  Press any key to close this help screen.
 `
-	return headerStyle.Render(" Help ") + "\n" +
-		strings.Repeat("─", m.width) + "\n" +
-		help
+	var b strings.Builder
+	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(strings.Repeat("─", m.width) + "\n")
+	b.WriteString(help)
+
+	// Fill remaining space
+	helpLines := strings.Count(help, "\n")
+	linesUsed := 2 + helpLines
+	paddingLines := max(0, m.height-linesUsed)
+	b.WriteString(strings.Repeat("\n", paddingLines))
+
+	return b.String()
 }
 
 // renderFooter renders the status bar footer
@@ -627,7 +722,7 @@ func (m Model) getVisibleTodos() []Todo {
 }
 
 // adjustCursor ensures cursor is within valid bounds
-func (m Model) adjustCursor() {
+func (m *Model) adjustCursor() {
 	todos := m.getVisibleTodos()
 	if m.cursor >= len(todos) {
 		m.cursor = max(0, len(todos)-1)
@@ -635,6 +730,35 @@ func (m Model) adjustCursor() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	// Adjust scroll offset by calling value method and copying back
+	updated := Model(*m).adjustScrollOffset()
+	m.scrollOffset = updated.scrollOffset
+}
+
+// adjustScrollOffset ensures the cursor is visible in the viewport
+// Returns the model with adjusted scroll offset
+func (m Model) adjustScrollOffset() Model {
+	// Calculate how many todos we can show at once
+	// Header: 2 lines, Footer: 3 lines, Message: 1 line = 6 reserved lines
+	// Each todo takes roughly 3-5 lines, but let's count actual items
+	maxVisibleItems := max(1, (m.height-8)/4) // Conservative estimate
+
+	// If cursor is above the viewport, scroll up
+	if m.cursor < m.scrollOffset {
+		m.scrollOffset = m.cursor
+	}
+
+	// If cursor is below the viewport, scroll down
+	if m.cursor >= m.scrollOffset+maxVisibleItems {
+		m.scrollOffset = m.cursor - maxVisibleItems + 1
+	}
+
+	// Ensure scroll offset is never negative
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+
+	return m
 }
 
 // save persists the current todo list to storage
