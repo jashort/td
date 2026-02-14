@@ -97,7 +97,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyPress(msg)
 	}
 
-	// Update textarea if in add/edit mode
+	// Update textarea if in add/edit mode (for non-KeyMsg events)
 	if m.mode == ModeAdd || m.mode == ModeEdit {
 		var cmd tea.Cmd
 		m.textarea, cmd = m.textarea.Update(msg)
@@ -236,13 +236,14 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleAddMode handles key presses in add mode
 func (m Model) handleAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle special keys before passing to textarea
 	switch msg.String() {
 	case "esc":
 		m.mode = ModeNormal
 		m.textarea.Blur()
 		return m, nil
 
-	case "ctrl+s", "ctrl+enter":
+	case "ctrl+s":
 		text := strings.TrimSpace(m.textarea.Value())
 		if text != "" {
 			m.list.AddTodo(text)
@@ -255,6 +256,21 @@ func (m Model) handleAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Check for Ctrl+J (alternative to Ctrl+S)
+	if msg.Type == tea.KeyCtrlJ {
+		text := strings.TrimSpace(m.textarea.Value())
+		if text != "" {
+			m.list.AddTodo(text)
+			m.save()
+			m.showMessage("Todo added successfully")
+		}
+		m.mode = ModeNormal
+		m.textarea.Blur()
+		m.adjustCursor()
+		return m, nil
+	}
+
+	// Pass all other keys (including regular Enter) to textarea
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	return m, cmd
@@ -262,6 +278,7 @@ func (m Model) handleAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleEditMode handles key presses in edit mode
 func (m Model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle special keys before passing to textarea
 	switch msg.String() {
 	case "esc":
 		m.mode = ModeNormal
@@ -269,7 +286,7 @@ func (m Model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editingTodoID = ""
 		return m, nil
 
-	case "ctrl+s", "ctrl+enter":
+	case "ctrl+s":
 		text := strings.TrimSpace(m.textarea.Value())
 		if text != "" {
 			m.list.UpdateTodo(m.editingTodoID, text)
@@ -282,6 +299,21 @@ func (m Model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Check for Ctrl+J (alternative to Ctrl+S)
+	if msg.Type == tea.KeyCtrlJ {
+		text := strings.TrimSpace(m.textarea.Value())
+		if text != "" {
+			m.list.UpdateTodo(m.editingTodoID, text)
+			m.save()
+			m.showMessage("Todo updated successfully")
+		}
+		m.mode = ModeNormal
+		m.textarea.Blur()
+		m.editingTodoID = ""
+		return m, nil
+	}
+
+	// Pass all other keys (including regular Enter) to textarea
 	var cmd tea.Cmd
 	m.textarea, cmd = m.textarea.Update(msg)
 	return m, cmd
@@ -374,7 +406,7 @@ func (m Model) View() string {
 func (m Model) renderNormal() string {
 	var b strings.Builder
 
-	// Header
+	// Header (takes 2 lines)
 	header := headerStyle.Render(fmt.Sprintf(" td - Todo List Manager%s[%s] ", strings.Repeat(" ", max(0, m.width-45)), m.mode))
 	b.WriteString(header + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n")
@@ -384,14 +416,35 @@ func (m Model) renderNormal() string {
 	if len(todos) == 0 {
 		b.WriteString(dimStyle.Render("\n  No todos to display.\n  Press 'a' to add a new todo, '?' for help.\n\n"))
 	} else {
+		// Calculate how many lines we can show (reserve space for header, footer, and message)
+		// Header: 2 lines, Footer: 3 lines (separator + 2 lines status), Message: 1 line
+		// This gives us a buffer to ensure footer is always visible
+		maxContentLines := m.height - 8
+
+		linesRendered := 0
 		for i, todo := range todos {
-			b.WriteString(m.renderTodo(todo, i == m.cursor))
+			if maxContentLines > 0 && linesRendered >= maxContentLines {
+				// Show indicator that there are more items
+				b.WriteString(dimStyle.Render(fmt.Sprintf("\n  ... %d more items (scroll with j/k) ...\n", len(todos)-i)))
+				break
+			}
+
+			todoStr := m.renderTodo(todo, i == m.cursor)
+			b.WriteString(todoStr)
+
+			// Count approximate lines (title + desc lines + metadata + blank)
+			lines := 3 // minimum: title + metadata + blank
+			if todo.Description != "" {
+				lines += len(strings.Split(todo.Description, "\n"))
+			}
+			linesRendered += lines
 		}
 	}
 
-	// Footer
+	// Always show footer - add a newline before it if needed
+	footer := m.renderFooter()
 	b.WriteString("\n" + strings.Repeat("─", m.width) + "\n")
-	b.WriteString(m.renderFooter())
+	b.WriteString(footer)
 
 	// Message
 	if m.message != "" && time.Now().Before(m.messageTimeout) {
@@ -525,6 +578,11 @@ func (m Model) renderHelp() string {
    J/Ctrl+J    Move todo down in order
    K/Ctrl+K    Move todo up in order
 
+ Add/Edit Mode:
+   Enter       New line (multi-line support)
+   Ctrl+S      Save todo
+   Esc         Cancel
+
  General:
    ?/h         Show this help
    q/Ctrl+C    Quit
@@ -638,6 +696,7 @@ var (
 			Background(lipgloss.Color("63"))
 
 	titleStyle = lipgloss.NewStyle().
+			Bold(true).
 			Foreground(lipgloss.Color("15"))
 
 	descriptionStyle = lipgloss.NewStyle().

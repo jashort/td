@@ -71,7 +71,7 @@ td
 
 ### Add/Edit Mode
 - `Enter` - New line (multi-line support)
-- `Ctrl+S` or `Ctrl+Enter` - Save
+- `Ctrl+S` - Save
 - `Esc` - Cancel
 
 ### Filter Mode
