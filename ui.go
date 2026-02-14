@@ -142,8 +142,7 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "e":
-		if len(todos) > 0 && m.cursor < len(todos) {
-			todo := todos[m.cursor]
+		if todo := m.getCurrentTodo(); todo != nil {
 			m.mode = ModeEdit
 			m.editingTodoID = todo.ID
 			m.textarea.SetValue(todo.GetFullText())
@@ -152,14 +151,13 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
-		if len(todos) > 0 && m.cursor < len(todos) {
+		if m.getCurrentTodo() != nil {
 			m.mode = ModeDelete
 		}
 		return m, nil
 
 	case " ":
-		if len(todos) > 0 && m.cursor < len(todos) {
-			todo := todos[m.cursor]
+		if todo := m.getCurrentTodo(); todo != nil {
 			m.list.ToggleComplete(todo.ID)
 			m.save()
 			// Adjust cursor if needed
@@ -208,28 +206,22 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "J", "ctrl+j":
-		if len(todos) > 0 && m.cursor < len(todos) {
-			todo := todos[m.cursor]
-			if !todo.Completed {
-				if m.list.MoveDown(todo.ID) {
-					m.save()
-					if m.cursor < len(todos)-1 {
-						m.cursor++
-					}
+		if todo := m.getCurrentTodo(); todo != nil && !todo.Completed {
+			if m.list.MoveDown(todo.ID) {
+				m.save()
+				if m.cursor < len(todos)-1 {
+					m.cursor++
 				}
 			}
 		}
 		return m, nil
 
 	case "K", "ctrl+k":
-		if len(todos) > 0 && m.cursor < len(todos) {
-			todo := todos[m.cursor]
-			if !todo.Completed {
-				if m.list.MoveUp(todo.ID) {
-					m.save()
-					if m.cursor > 0 {
-						m.cursor--
-					}
+		if todo := m.getCurrentTodo(); todo != nil && !todo.Completed {
+			if m.list.MoveUp(todo.ID) {
+				m.save()
+				if m.cursor > 0 {
+					m.cursor--
 				}
 			}
 		}
@@ -239,39 +231,55 @@ func (m Model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// exitToNormalMode exits to normal mode and cleans up state
+func (m *Model) exitToNormalMode() {
+	m.mode = ModeNormal
+	m.textarea.Blur()
+	m.editingTodoID = ""
+	m.adjustCursor()
+}
+
+// handleTextareaSave handles saving textarea content with a custom save action
+func (m *Model) handleTextareaSave(onSave func(string), successMsg string) {
+	text := strings.TrimSpace(m.textarea.Value())
+	if text != "" {
+		onSave(text)
+		m.save()
+		m.showMessage(successMsg)
+	}
+	m.exitToNormalMode()
+}
+
+// getCurrentTodo returns the currently selected todo, or nil if invalid
+func (m *Model) getCurrentTodo() *Todo {
+	todos := m.getVisibleTodos()
+	if len(todos) > 0 && m.cursor < len(todos) {
+		todo := todos[m.cursor]
+		return &todo
+	}
+	return nil
+}
+
 // handleAddMode handles key presses in add mode
 func (m Model) handleAddMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle special keys before passing to textarea
 	switch msg.String() {
 	case "esc":
-		m.mode = ModeNormal
-		m.textarea.Blur()
+		m.exitToNormalMode()
 		return m, nil
 
 	case "ctrl+s":
-		text := strings.TrimSpace(m.textarea.Value())
-		if text != "" {
+		m.handleTextareaSave(func(text string) {
 			m.list.AddTodo(text)
-			m.save()
-			m.showMessage("Todo added successfully")
-		}
-		m.mode = ModeNormal
-		m.textarea.Blur()
-		m.adjustCursor()
+		}, "Todo added successfully")
 		return m, nil
 	}
 
 	// Check for Ctrl+J (alternative to Ctrl+S)
 	if msg.Type == tea.KeyCtrlJ {
-		text := strings.TrimSpace(m.textarea.Value())
-		if text != "" {
+		m.handleTextareaSave(func(text string) {
 			m.list.AddTodo(text)
-			m.save()
-			m.showMessage("Todo added successfully")
-		}
-		m.mode = ModeNormal
-		m.textarea.Blur()
-		m.adjustCursor()
+		}, "Todo added successfully")
 		return m, nil
 	}
 
@@ -286,35 +294,23 @@ func (m Model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle special keys before passing to textarea
 	switch msg.String() {
 	case "esc":
-		m.mode = ModeNormal
-		m.textarea.Blur()
-		m.editingTodoID = ""
+		m.exitToNormalMode()
 		return m, nil
 
 	case "ctrl+s":
-		text := strings.TrimSpace(m.textarea.Value())
-		if text != "" {
-			m.list.UpdateTodo(m.editingTodoID, text)
-			m.save()
-			m.showMessage("Todo updated successfully")
-		}
-		m.mode = ModeNormal
-		m.textarea.Blur()
-		m.editingTodoID = ""
+		editID := m.editingTodoID
+		m.handleTextareaSave(func(text string) {
+			m.list.UpdateTodo(editID, text)
+		}, "Todo updated successfully")
 		return m, nil
 	}
 
 	// Check for Ctrl+J (alternative to Ctrl+S)
 	if msg.Type == tea.KeyCtrlJ {
-		text := strings.TrimSpace(m.textarea.Value())
-		if text != "" {
-			m.list.UpdateTodo(m.editingTodoID, text)
-			m.save()
-			m.showMessage("Todo updated successfully")
-		}
-		m.mode = ModeNormal
-		m.textarea.Blur()
-		m.editingTodoID = ""
+		editID := m.editingTodoID
+		m.handleTextareaSave(func(text string) {
+			m.list.UpdateTodo(editID, text)
+		}, "Todo updated successfully")
 		return m, nil
 	}
 
@@ -356,12 +352,9 @@ func (m Model) handleFilterMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleDeleteMode handles key presses in delete confirmation mode
 func (m Model) handleDeleteMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	todos := m.getVisibleTodos()
-
 	switch msg.String() {
 	case "y", "Y":
-		if len(todos) > 0 && m.cursor < len(todos) {
-			todo := todos[m.cursor]
+		if todo := m.getCurrentTodo(); todo != nil {
 			m.list.DeleteTodo(todo.ID)
 			m.save()
 			m.showMessage("Todo deleted")
@@ -404,6 +397,30 @@ func (m Model) View() string {
 	return ""
 }
 
+// renderHeader renders a styled header with title and mode indicator
+func (m Model) renderHeader(title string) string {
+	modeStr := fmt.Sprintf("[%s] ", m.mode)
+	padding := max(0, m.width-len(title)-len(modeStr))
+	header := title + strings.Repeat(" ", padding) + modeStr
+	return headerStyle.Render(header)
+}
+
+// renderScrollIndicator renders a scroll indicator line with message
+func (m Model) renderScrollIndicator(message string) string {
+	leftPadding := 4 // Align with todo items
+	msgStyled := dimStyle.Render(message)
+	rightPadding := max(0, m.width-leftPadding-len(message))
+	return strings.Repeat("─", leftPadding) + msgStyled + strings.Repeat("─", rightPadding)
+}
+
+// fillPadding adds padding lines to fill remaining vertical space
+func fillPadding(b *strings.Builder, height, linesUsed int) {
+	paddingLines := height - linesUsed
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
+}
+
 // renderNormal renders the normal mode view
 func (m Model) renderNormal() string {
 	var b strings.Builder
@@ -420,8 +437,7 @@ func (m Model) renderNormal() string {
 	todos := m.getVisibleTodos()
 	if m.scrollOffset > 0 {
 		scrollMsg := fmt.Sprintf("↑ %d more above", m.scrollOffset)
-		leftPadding := 4 // Align with todo items
-		b.WriteString(strings.Repeat("─", leftPadding) + dimStyle.Render(scrollMsg) + strings.Repeat("─", m.width-leftPadding-len(scrollMsg)) + "\n")
+		b.WriteString(m.renderScrollIndicator(scrollMsg) + "\n")
 	} else {
 		b.WriteString(strings.Repeat("─", m.width) + "\n")
 	}
@@ -486,8 +502,7 @@ func (m Model) renderNormal() string {
 		remainingItems := len(todos) - (m.scrollOffset + itemsShown)
 		if remainingItems > 0 {
 			scrollMsg := fmt.Sprintf("↓ %d more below", remainingItems)
-			leftPadding := 4 // Align with todo items
-			b.WriteString(strings.Repeat("─", leftPadding) + dimStyle.Render(scrollMsg) + strings.Repeat("─", m.width-leftPadding-len(scrollMsg)) + "\n")
+			b.WriteString(m.renderScrollIndicator(scrollMsg) + "\n")
 		} else {
 			b.WriteString(strings.Repeat("─", m.width) + "\n")
 		}
@@ -507,6 +522,31 @@ func (m Model) renderNormal() string {
 	return b.String()
 }
 
+// getStyleForTodo returns the appropriate style for a todo based on its state
+func getStyleForTodo(todo Todo, selected bool, forDescription bool) lipgloss.Style {
+	var style lipgloss.Style
+
+	if forDescription {
+		if todo.Completed {
+			style = completedStyle
+		} else {
+			style = descriptionStyle
+		}
+	} else {
+		// For title
+		if todo.Completed {
+			style = completedStyle
+		} else {
+			style = titleStyle
+		}
+		if selected {
+			style = style.Background(lipgloss.Color("240"))
+		}
+	}
+
+	return style
+}
+
 // renderTodo renders a single todo item
 func (m Model) renderTodo(todo Todo, selected bool) string {
 	var b strings.Builder
@@ -522,30 +562,18 @@ func (m Model) renderTodo(todo Todo, selected bool) string {
 		checkbox = "☑"
 	}
 
-	// Title line
-	titleStyle := titleStyle
-	if todo.Completed {
-		titleStyle = completedStyle
-	}
-	if selected {
-		titleStyle = titleStyle.Background(lipgloss.Color("240"))
-	}
-
-	// Highlight tags in title
+	// Title line with appropriate style
 	title := m.highlightTags(todo.Title)
-
+	titleStyle := getStyleForTodo(todo, selected, false)
 	line := prefix + checkbox + " " + title
 	b.WriteString(titleStyle.Render(line) + "\n")
 
 	// Description (if present)
 	if todo.Description != "" {
 		descLines := strings.Split(todo.Description, "\n")
+		descStyle := getStyleForTodo(todo, false, true)
 		for _, descLine := range descLines {
 			desc := m.highlightTags(descLine)
-			descStyle := descriptionStyle
-			if todo.Completed {
-				descStyle = completedStyle
-			}
 			b.WriteString(descStyle.Render("    "+desc) + "\n")
 		}
 	}
@@ -566,20 +594,14 @@ func (m Model) renderTodo(todo Todo, selected bool) string {
 func (m Model) renderAdd() string {
 	var b strings.Builder
 
-	headerText := " Add New Todo"
-	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
-	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(m.renderHeader(" Add New Todo") + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
 	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel"))
 
 	// Calculate lines used and fill to exactly m.height
 	linesUsed := 5 + strings.Count(m.textarea.View(), "\n")
-	paddingLines := m.height - linesUsed
-	if paddingLines > 0 {
-		b.WriteString(strings.Repeat("\n", paddingLines))
-	}
+	fillPadding(&b, m.height, linesUsed)
 
 	return b.String()
 }
@@ -588,20 +610,14 @@ func (m Model) renderAdd() string {
 func (m Model) renderEdit() string {
 	var b strings.Builder
 
-	headerText := " Edit Todo"
-	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
-	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(m.renderHeader(" Edit Todo") + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
 	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel"))
 
 	// Calculate lines used and fill to exactly m.height
 	linesUsed := 5 + strings.Count(m.textarea.View(), "\n")
-	paddingLines := m.height - linesUsed
-	if paddingLines > 0 {
-		b.WriteString(strings.Repeat("\n", paddingLines))
-	}
+	fillPadding(&b, m.height, linesUsed)
 
 	return b.String()
 }
@@ -610,10 +626,7 @@ func (m Model) renderEdit() string {
 func (m Model) renderFilter() string {
 	var b strings.Builder
 
-	headerText := " Filter by Tags"
-	padding := max(0, m.width-len(headerText)-len(fmt.Sprintf("[%s] ", m.mode)))
-	header := headerText + strings.Repeat(" ", padding) + fmt.Sprintf("[%s] ", m.mode)
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(m.renderHeader(" Filter by Tags") + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString("  Enter tags separated by spaces (e.g., work urgent)\n")
 	b.WriteString("  Filter: " + m.filterInput + "█\n\n")
@@ -621,10 +634,7 @@ func (m Model) renderFilter() string {
 
 	// Calculate lines used and fill to exactly m.height
 	linesUsed := 6
-	paddingLines := m.height - linesUsed
-	if paddingLines > 0 {
-		b.WriteString(strings.Repeat("\n", paddingLines))
-	}
+	fillPadding(&b, m.height, linesUsed)
 
 	return b.String()
 }
@@ -633,17 +643,12 @@ func (m Model) renderFilter() string {
 func (m Model) renderDelete() string {
 	var b strings.Builder
 
-	headerText := " Delete Todo"
-	padding := max(0, m.width-len(headerText))
-	header := headerText + strings.Repeat(" ", padding)
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(m.renderHeader(" Delete Todo") + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 
-	todos := m.getVisibleTodos()
 	linesUsed := 3 // header + separator + blank
 
-	if m.cursor < len(todos) {
-		todo := todos[m.cursor]
+	if todo := m.getCurrentTodo(); todo != nil {
 		b.WriteString("  Are you sure you want to delete this todo?\n\n")
 		b.WriteString(fmt.Sprintf("  %s\n\n", todo.Title))
 		linesUsed += 4
@@ -653,20 +658,13 @@ func (m Model) renderDelete() string {
 	linesUsed += 1
 
 	// Calculate lines used and fill to exactly m.height
-	paddingLines := m.height - linesUsed
-	if paddingLines > 0 {
-		b.WriteString(strings.Repeat("\n", paddingLines))
-	}
+	fillPadding(&b, m.height, linesUsed)
 
 	return b.String()
 }
 
 // renderHelp renders the help overlay
 func (m Model) renderHelp() string {
-	headerText := " Help"
-	padding := max(0, m.width-len(headerText))
-	header := headerText + strings.Repeat(" ", padding)
-
 	help := `
  Navigation:  j/↓ down  k/↑ up  g top  G bottom
 
@@ -682,15 +680,14 @@ func (m Model) renderHelp() string {
  Press any key to close help.
 `
 	var b strings.Builder
-	b.WriteString(headerStyle.Render(header) + "\n")
+	b.WriteString(m.renderHeader(" Help") + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n")
 	b.WriteString(help)
 
 	// Fill remaining space
 	helpLines := strings.Count(help, "\n")
 	linesUsed := 2 + helpLines
-	paddingLines := max(0, m.height-linesUsed)
-	b.WriteString(strings.Repeat("\n", paddingLines))
+	fillPadding(&b, m.height, linesUsed)
 
 	return b.String()
 }
