@@ -429,39 +429,50 @@ func (m Model) renderNormal() string {
 		b.WriteString(dimStyle.Render("\n  No todos to display.\n  Press 'a' to add a new todo, '?' for help.\n\n"))
 		linesUsed += 4
 	} else {
-		// Calculate how many lines we can show (reserve space for header, footer, and message)
-		// Header: 2 lines, Footer: 3 lines (separator + 2 lines status), Message: 1 line
-		// This gives us a buffer to ensure footer is always visible
-		maxContentLines := m.height - 8
-		maxVisibleItems := max(1, (m.height-8)/4) // Conservative estimate of items that fit
+		// Calculate how many lines we can show (reserve space for header and footer)
+		// Header: 2 lines, Footer: 3 lines (separator + status + message)
+		// We'll dynamically account for scroll indicators
+		maxContentLines := m.height - 5 // Just header and footer
 
 		// Show scroll indicator at top if we're scrolled down
 		if m.scrollOffset > 0 {
 			b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more items above ↑", m.scrollOffset)) + "\n")
 			linesUsed++
+			maxContentLines-- // Reduce available space
 		}
 
 		linesRendered := 0
 		itemsShown := 0
 		startIdx := m.scrollOffset
-		endIdx := min(len(todos), m.scrollOffset+maxVisibleItems)
 
-		for i := startIdx; i < endIdx; i++ {
+		// Render todos until we run out of space
+		for i := startIdx; i < len(todos); i++ {
 			todo := todos[i]
 
-			// Stop if we've run out of space
-			if maxContentLines > 0 && linesRendered >= maxContentLines {
+			// Count how many lines this todo will take
+			lines := 3 // minimum: title + metadata + blank
+			if todo.Description != "" {
+				lines += len(strings.Split(todo.Description, "\n"))
+			}
+
+			// Check if there will be items remaining after this one
+			willHaveMoreItems := (i+1 < len(todos))
+
+			// Calculate available space
+			// Reserve 1 line for bottom scroll indicator if there will be more items
+			availableLines := maxContentLines - linesRendered
+			if willHaveMoreItems {
+				availableLines-- // Reserve space for bottom indicator
+			}
+
+			// Stop if adding this todo would exceed available space
+			if lines > availableLines {
 				break
 			}
 
 			todoStr := m.renderTodo(todo, i == m.cursor)
 			b.WriteString(todoStr)
 
-			// Count approximate lines (title + desc lines + metadata + blank)
-			lines := 3 // minimum: title + metadata + blank
-			if todo.Description != "" {
-				lines += len(strings.Split(todo.Description, "\n"))
-			}
 			linesRendered += lines
 			linesUsed += lines
 			itemsShown++
@@ -475,20 +486,27 @@ func (m Model) renderNormal() string {
 		}
 	}
 
-	// Add padding to push footer to bottom
-	// Footer takes: 1 line (separator) + 1 line (status) + 1 line (message or blank)
+	// Add padding to push footer to exactly the bottom
+	// Footer takes: 1 line (separator) + 1 line (status) + 1 line (message)
 	footerLines := 3
-	paddingLines := m.height - linesUsed - footerLines - 1 // -1 because we don't want a final newline
+	totalLines := linesUsed + footerLines
+	paddingLines := m.height - totalLines
+
+	// Ensure we have non-negative padding
+	if paddingLines < 0 {
+		paddingLines = 0
+	}
+
 	if paddingLines > 0 {
 		b.WriteString(strings.Repeat("\n", paddingLines))
 	}
 
-	// Always show footer at the bottom
+	// Always show footer at the bottom (last 3 lines)
 	footer := m.renderFooter()
 	b.WriteString(strings.Repeat("─", m.width) + "\n")
 	b.WriteString(footer + "\n")
 
-	// Message on final line
+	// Message on final line (line m.height)
 	if m.message != "" && time.Now().Before(m.messageTimeout) {
 		b.WriteString(successStyle.Render(m.message))
 	}
@@ -561,12 +579,14 @@ func (m Model) renderAdd() string {
 	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel") + "\n")
+	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel"))
 
-	// Fill remaining space
-	linesUsed := 6 + strings.Count(m.textarea.View(), "\n")
-	paddingLines := max(0, m.height-linesUsed)
-	b.WriteString(strings.Repeat("\n", paddingLines))
+	// Calculate lines used and fill to exactly m.height
+	linesUsed := 5 + strings.Count(m.textarea.View(), "\n")
+	paddingLines := m.height - linesUsed
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
 
 	return b.String()
 }
@@ -581,12 +601,14 @@ func (m Model) renderEdit() string {
 	b.WriteString(headerStyle.Render(header) + "\n")
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString(m.textarea.View() + "\n\n")
-	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel") + "\n")
+	b.WriteString(dimStyle.Render("Ctrl+S to save, Esc to cancel"))
 
-	// Fill remaining space
-	linesUsed := 6 + strings.Count(m.textarea.View(), "\n")
-	paddingLines := max(0, m.height-linesUsed)
-	b.WriteString(strings.Repeat("\n", paddingLines))
+	// Calculate lines used and fill to exactly m.height
+	linesUsed := 5 + strings.Count(m.textarea.View(), "\n")
+	paddingLines := m.height - linesUsed
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
 
 	return b.String()
 }
@@ -602,12 +624,14 @@ func (m Model) renderFilter() string {
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 	b.WriteString("  Enter tags separated by spaces (e.g., work urgent)\n")
 	b.WriteString("  Filter: " + m.filterInput + "█\n\n")
-	b.WriteString(dimStyle.Render("Enter to apply filter, Esc to cancel") + "\n")
+	b.WriteString(dimStyle.Render("Enter to apply filter, Esc to cancel"))
 
-	// Fill remaining space
-	linesUsed := 7
-	paddingLines := max(0, m.height-linesUsed)
-	b.WriteString(strings.Repeat("\n", paddingLines))
+	// Calculate lines used and fill to exactly m.height
+	linesUsed := 6
+	paddingLines := m.height - linesUsed
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
 
 	return b.String()
 }
@@ -623,18 +647,23 @@ func (m Model) renderDelete() string {
 	b.WriteString(strings.Repeat("─", m.width) + "\n\n")
 
 	todos := m.getVisibleTodos()
+	linesUsed := 3 // header + separator + blank
+
 	if m.cursor < len(todos) {
 		todo := todos[m.cursor]
 		b.WriteString("  Are you sure you want to delete this todo?\n\n")
 		b.WriteString(fmt.Sprintf("  %s\n\n", todo.Title))
+		linesUsed += 4
 	}
 
-	b.WriteString(errorStyle.Render("  Press 'y' to confirm, 'n' or Esc to cancel") + "\n")
+	b.WriteString(errorStyle.Render("  Press 'y' to confirm, 'n' or Esc to cancel"))
+	linesUsed += 1
 
-	// Fill remaining space
-	linesUsed := 8
-	paddingLines := max(0, m.height-linesUsed)
-	b.WriteString(strings.Repeat("\n", paddingLines))
+	// Calculate lines used and fill to exactly m.height
+	paddingLines := m.height - linesUsed
+	if paddingLines > 0 {
+		b.WriteString(strings.Repeat("\n", paddingLines))
+	}
 
 	return b.String()
 }
@@ -738,10 +767,27 @@ func (m *Model) adjustCursor() {
 // adjustScrollOffset ensures the cursor is visible in the viewport
 // Returns the model with adjusted scroll offset
 func (m Model) adjustScrollOffset() Model {
-	// Calculate how many todos we can show at once
-	// Header: 2 lines, Footer: 3 lines, Message: 1 line = 6 reserved lines
-	// Each todo takes roughly 3-5 lines, but let's count actual items
-	maxVisibleItems := max(1, (m.height-8)/4) // Conservative estimate
+	todos := m.getVisibleTodos()
+	if len(todos) == 0 {
+		m.scrollOffset = 0
+		return m
+	}
+
+	// Calculate available space for content
+	availableLines := m.height - 7 // Header(2) + Footer(3) + scroll indicators(2)
+
+	// Calculate average lines per todo (minimum 3 lines per todo)
+	avgLinesPerTodo := 3
+	for _, todo := range todos {
+		lines := 3
+		if todo.Description != "" {
+			lines += len(strings.Split(todo.Description, "\n"))
+		}
+		avgLinesPerTodo = (avgLinesPerTodo + lines) / 2 // Running average
+	}
+
+	// Estimate how many items can fit
+	maxVisibleItems := max(1, availableLines/avgLinesPerTodo)
 
 	// If cursor is above the viewport, scroll up
 	if m.cursor < m.scrollOffset {
@@ -756,6 +802,12 @@ func (m Model) adjustScrollOffset() Model {
 	// Ensure scroll offset is never negative
 	if m.scrollOffset < 0 {
 		m.scrollOffset = 0
+	}
+
+	// Ensure scroll offset doesn't go past the end
+	maxOffset := max(0, len(todos)-maxVisibleItems)
+	if m.scrollOffset > maxOffset {
+		m.scrollOffset = maxOffset
 	}
 
 	return m
