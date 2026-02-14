@@ -380,11 +380,8 @@ func (m Model) handleDeleteMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleHelpMode handles key presses in help mode
 func (m Model) handleHelpMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "?", "h", "q":
-		m.mode = ModeNormal
-		return m, nil
-	}
+	// Any key press exits help mode
+	m.mode = ModeNormal
 	return m, nil
 }
 
@@ -671,38 +668,18 @@ func (m Model) renderHelp() string {
 	header := headerText + strings.Repeat(" ", padding)
 
 	help := `
- td - Todo List Manager - Help
+ Navigation:  j/↓ down  k/↑ up  g top  G bottom
 
- Navigation:
-   j/↓         Move down
-   k/↑         Move up
-   g           Jump to top
-   G           Jump to bottom
+ Actions:  a add  e edit  d delete  space toggle  t show-done  f filter
+           J/Ctrl+J move down  K/Ctrl+K move up
 
- Actions:
-   a           Add new todo
-   e           Edit selected todo
-   d           Delete selected todo
-   space       Toggle completion status
-   t           Toggle show/hide completed items
-   f           Filter by tags
-   J/Ctrl+J    Move todo down in order
-   K/Ctrl+K    Move todo up in order
+ Edit Mode:  Enter newline  Ctrl+S save  Esc cancel
 
- Add/Edit Mode:
-   Enter       New line (multi-line support)
-   Ctrl+S      Save todo
-   Esc         Cancel
+ General:  ?/h help  q/Ctrl+C quit
 
- General:
-   ?/h         Show this help
-   q/Ctrl+C    Quit
+ Tags: Use #hashtags in todo text. Example: "Buy groceries #personal"
 
- Tags:
-   Use #hashtags anywhere in your todo text to create tags.
-   Example: "Buy groceries #personal #shopping"
-
- Press any key to close this help screen.
+ Press any key to close help.
 `
 	var b strings.Builder
 	b.WriteString(headerStyle.Render(header) + "\n")
