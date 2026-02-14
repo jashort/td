@@ -418,31 +418,31 @@ func (m Model) renderNormal() string {
 	headerText := headerLeft + strings.Repeat(" ", padding) + headerRight
 	header := headerStyle.Render(headerText)
 	b.WriteString(header + "\n")
-	b.WriteString(strings.Repeat("─", m.width) + "\n")
+
+	// Header separator line - show scroll indicator if scrolled down
+	todos := m.getVisibleTodos()
+	if m.scrollOffset > 0 {
+		scrollMsg := fmt.Sprintf("↑ %d more above", m.scrollOffset)
+		leftPadding := 4 // Align with todo items
+		b.WriteString(strings.Repeat("─", leftPadding) + dimStyle.Render(scrollMsg) + strings.Repeat("─", m.width-leftPadding-len(scrollMsg)) + "\n")
+	} else {
+		b.WriteString(strings.Repeat("─", m.width) + "\n")
+	}
 
 	// Track lines used
-	linesUsed := 2 // header
+	linesUsed := 2  // header
+	itemsShown := 0 // Track items shown for scroll indicator
 
 	// Todos
-	todos := m.getVisibleTodos()
 	if len(todos) == 0 {
 		b.WriteString(dimStyle.Render("\n  No todos to display.\n  Press 'a' to add a new todo, '?' for help.\n\n"))
 		linesUsed += 4
 	} else {
 		// Calculate how many lines we can show (reserve space for header and footer)
 		// Header: 2 lines, Footer: 3 lines (separator + status + message)
-		// We'll dynamically account for scroll indicators
-		maxContentLines := m.height - 5 // Just header and footer
-
-		// Show scroll indicator at top if we're scrolled down
-		if m.scrollOffset > 0 {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more items above ↑", m.scrollOffset)) + "\n")
-			linesUsed++
-			maxContentLines-- // Reduce available space
-		}
+		maxContentLines := m.height - 5
 
 		linesRendered := 0
-		itemsShown := 0
 		startIdx := m.scrollOffset
 
 		// Render todos until we run out of space
@@ -455,18 +455,8 @@ func (m Model) renderNormal() string {
 				lines += len(strings.Split(todo.Description, "\n"))
 			}
 
-			// Check if there will be items remaining after this one
-			willHaveMoreItems := (i+1 < len(todos))
-
-			// Calculate available space
-			// Reserve 1 line for bottom scroll indicator if there will be more items
-			availableLines := maxContentLines - linesRendered
-			if willHaveMoreItems {
-				availableLines-- // Reserve space for bottom indicator
-			}
-
 			// Stop if adding this todo would exceed available space
-			if lines > availableLines {
+			if linesRendered+lines > maxContentLines {
 				break
 			}
 
@@ -476,13 +466,6 @@ func (m Model) renderNormal() string {
 			linesRendered += lines
 			linesUsed += lines
 			itemsShown++
-		}
-
-		// Show scroll indicator at bottom if there are more items
-		remainingItems := len(todos) - (m.scrollOffset + itemsShown)
-		if remainingItems > 0 {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("  ↓ %d more items below ↓", remainingItems)) + "\n")
-			linesUsed++
 		}
 	}
 
@@ -501,9 +484,22 @@ func (m Model) renderNormal() string {
 		b.WriteString(strings.Repeat("\n", paddingLines))
 	}
 
+	// Footer separator line - show scroll indicator if there are more items below
+	if len(todos) > 0 {
+		remainingItems := len(todos) - (m.scrollOffset + itemsShown)
+		if remainingItems > 0 {
+			scrollMsg := fmt.Sprintf("↓ %d more below", remainingItems)
+			leftPadding := 4 // Align with todo items
+			b.WriteString(strings.Repeat("─", leftPadding) + dimStyle.Render(scrollMsg) + strings.Repeat("─", m.width-leftPadding-len(scrollMsg)) + "\n")
+		} else {
+			b.WriteString(strings.Repeat("─", m.width) + "\n")
+		}
+	} else {
+		b.WriteString(strings.Repeat("─", m.width) + "\n")
+	}
+
 	// Always show footer at the bottom (last 3 lines)
 	footer := m.renderFooter()
-	b.WriteString(strings.Repeat("─", m.width) + "\n")
 	b.WriteString(footer + "\n")
 
 	// Message on final line (line m.height)
